@@ -5,7 +5,6 @@ import type { Awareness } from 'y-protocols/awareness';
 import { useAuthStore } from '../store/authStore';
 import type { CollaboratorPresence } from '../types';
 
-/** Deterministic color derived from username — consistent across page reloads */
 function userColor(username: string): string {
   const palette = [
     '#e57373', '#f06292', '#ba68c8', '#7986cb',
@@ -36,11 +35,10 @@ export interface CollaborationHandle {
 }
 
 export function useCollaboration(documentId: string | null): CollaborationHandle {
-  const { accessToken, user } = useAuthStore();
+  const { session, user } = useAuthStore();
   const [collaborators, setCollaborators] = useState<CollaboratorPresence[]>([]);
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>('disconnected');
 
-  // Stable ref so event callbacks never close over stale state
   const handleRef = useRef<{
     ydoc: Y.Doc | null;
     ytext: Y.Text | null;
@@ -49,19 +47,21 @@ export function useCollaboration(documentId: string | null): CollaborationHandle
   }>({ ydoc: null, ytext: null, awareness: null, provider: null });
 
   const teardown = useCallback(() => {
-    const { provider, ydoc } = handleRef.current;
-    if (provider) {
-      provider.disconnect();
-      provider.destroy();
-    }
-    if (ydoc) ydoc.destroy();
+    handleRef.current.provider?.disconnect();
+    handleRef.current.provider?.destroy();
+    handleRef.current.ydoc?.destroy();
     handleRef.current = { ydoc: null, ytext: null, awareness: null, provider: null };
     setCollaborators([]);
     setConnectionStatus('disconnected');
   }, []);
 
   useEffect(() => {
-    if (!documentId || !accessToken || !user) {
+    // Use the live Supabase access token — the SDK auto-refreshes it
+    const accessToken = session?.access_token;
+    const username =
+      user?.user_metadata?.username ?? user?.email?.split('@')[0] ?? 'Anonymous';
+
+    if (!documentId || !accessToken) {
       teardown();
       return;
     }
@@ -69,22 +69,17 @@ export function useCollaboration(documentId: string | null): CollaborationHandle
     const ydoc = new Y.Doc();
     const ytext = ydoc.getText('content');
 
-    /**
-     * y-websocket WebsocketProvider appends `/${roomName}` to the server URL
-     * and adds `params` as query string parameters. Resulting URL:
-     *   ws://host/ws/<documentId>?token=<accessToken>
-     */
     const provider = new WebsocketProvider(WS_BASE, documentId, ydoc, {
       connect: true,
       params: { token: accessToken },
     });
 
     const { awareness } = provider;
-    const color = userColor(user.username);
+    const color = userColor(username);
 
     awareness.setLocalStateField('user', {
-      userId: user.userId,
-      username: user.username,
+      userId: user?.id ?? '',
+      username,
       color,
     });
 
@@ -98,14 +93,11 @@ export function useCollaboration(documentId: string | null): CollaborationHandle
     provider.on('sync', syncHandler);
 
     const awarenessHandler = () => {
-      const states = awareness.getStates();
       const seen = new Set<string>();
       const present: CollaboratorPresence[] = [];
-
-      states.forEach((state) => {
-        if (!state?.user) return;
-        const u = state.user as CollaboratorPresence;
-        if (!seen.has(u.userId)) {
+      awareness.getStates().forEach((state) => {
+        const u = state?.user as CollaboratorPresence | undefined;
+        if (u && !seen.has(u.userId)) {
           seen.add(u.userId);
           present.push(u);
         }
@@ -115,7 +107,6 @@ export function useCollaboration(documentId: string | null): CollaborationHandle
 
     awareness.on('change', awarenessHandler);
     setConnectionStatus('connecting');
-
     handleRef.current = { ydoc, ytext, awareness, provider };
 
     return () => {
@@ -123,11 +114,7 @@ export function useCollaboration(documentId: string | null): CollaborationHandle
       provider.off('sync', syncHandler);
       teardown();
     };
-  }, [documentId, accessToken, user, teardown]);
+  }, [documentId, session?.access_token, user, teardown]);
 
-  return {
-    ...handleRef.current,
-    collaborators,
-    connectionStatus,
-  };
+  return { ...handleRef.current, collaborators, connectionStatus };
 }

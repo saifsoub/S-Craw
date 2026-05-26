@@ -1,4 +1,5 @@
-import { useAuthStore } from '../store/authStore';
+import { getAccessToken } from '../store/authStore';
+import { supabase } from '../lib/supabase';
 
 const API_BASE = '/api';
 
@@ -13,39 +14,27 @@ class ApiError extends Error {
 }
 
 class ApiClient {
-  private async request<T>(
-    path: string,
-    options: RequestInit = {},
-    isRetry = false,
-  ): Promise<T> {
-    const { accessToken, refreshToken, updateTokens, logout } = useAuthStore.getState();
+  private async request<T>(path: string, options: RequestInit = {}): Promise<T> {
+    // Always use the live Supabase session token — auto-refreshed by the SDK
+    const token = getAccessToken();
 
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
       ...(options.headers as Record<string, string>),
     };
-    if (accessToken) headers['Authorization'] = `Bearer ${accessToken}`;
+    if (token) headers['Authorization'] = `Bearer ${token}`;
 
     const response = await fetch(`${API_BASE}${path}`, { ...options, headers });
 
-    // Auto-refresh on 401, but only once to prevent infinite loops
-    if (response.status === 401 && !isRetry && refreshToken) {
-      try {
-        const refreshRes = await fetch(`${API_BASE}/auth/refresh`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ refreshToken }),
-        });
-
-        if (refreshRes.ok) {
-          const newTokens = (await refreshRes.json()) as { accessToken: string; refreshToken: string };
-          updateTokens(newTokens);
-          return this.request<T>(path, options, true);
-        }
-      } catch {
-        /* refresh network failure — fall through to logout */
+    if (response.status === 401) {
+      // Supabase SDK refreshes tokens automatically; force a refresh then retry once
+      const { error } = await supabase.auth.refreshSession();
+      if (!error) {
+        const newToken = getAccessToken();
+        if (newToken) headers['Authorization'] = `Bearer ${newToken}`;
+        const retry = await fetch(`${API_BASE}${path}`, { ...options, headers });
+        if (retry.ok) return retry.json() as Promise<T>;
       }
-      logout();
       throw new ApiError('Session expired. Please sign in again.', 401);
     }
 

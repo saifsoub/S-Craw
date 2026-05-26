@@ -3,13 +3,13 @@ import { Link } from 'react-router-dom';
 import { useLogin } from '../../hooks/useAuth';
 
 export function LoginForm() {
-  const [emailOrUsername, setEmailOrUsername] = useState('');
+  const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const { mutate: login, isPending, error } = useLogin();
 
   const handleSubmit = (e: FormEvent) => {
     e.preventDefault();
-    login({ emailOrUsername, password });
+    login({ email, password });
   };
 
   return (
@@ -18,23 +18,19 @@ export function LoginForm() {
         <h1 className="auth-title">Welcome back</h1>
         <p className="auth-subtitle">Sign in to your account</p>
 
-        {error && (
-          <div className="error-banner" role="alert">
-            {error.message}
-          </div>
-        )}
+        {error && <div className="error-banner" role="alert">{error.message}</div>}
 
         <form onSubmit={handleSubmit} className="auth-form" noValidate>
           <div className="form-group">
-            <label htmlFor="emailOrUsername">Email or Username</label>
+            <label htmlFor="email">Email</label>
             <input
-              id="emailOrUsername"
-              type="text"
-              value={emailOrUsername}
-              onChange={(e) => setEmailOrUsername(e.target.value)}
+              id="email"
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
               placeholder="you@example.com"
               required
-              autoComplete="username"
+              autoComplete="email"
               disabled={isPending}
             />
           </div>
@@ -60,9 +56,7 @@ export function LoginForm() {
 
         <p className="auth-footer">
           Don't have an account?{' '}
-          <Link to="/register" className="auth-link">
-            Create one
-          </Link>
+          <Link to="/register" className="auth-link">Create one</Link>
         </p>
       </div>
     </div>

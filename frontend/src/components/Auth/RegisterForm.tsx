@@ -8,7 +8,7 @@ export function RegisterForm() {
   const [password, setPassword] = useState('');
   const [confirm, setConfirm] = useState('');
   const [localError, setLocalError] = useState('');
-  const { mutate: register, isPending, error } = useRegister();
+  const { mutate: register, isPending, error, isSuccess } = useRegister();
 
   const handleSubmit = (e: FormEvent) => {
     e.preventDefault();
@@ -20,15 +20,29 @@ export function RegisterForm() {
 
   const displayError = localError || error?.message;
 
+  // Supabase may require email confirmation depending on project settings
+  if (isSuccess) {
+    return (
+      <div className="auth-container">
+        <div className="auth-card">
+          <div className="success-banner" style={{ marginBottom: 0 }}>
+            Account created! Check your email to confirm your address, then sign in.
+          </div>
+          <p className="auth-footer">
+            <Link to="/login" className="auth-link">Back to sign in</Link>
+          </p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="auth-container">
       <div className="auth-card">
         <h1 className="auth-title">Create account</h1>
         <p className="auth-subtitle">Start collaborating today</p>
 
-        {displayError && (
-          <div className="error-banner" role="alert">{displayError}</div>
-        )}
+        {displayError && <div className="error-banner" role="alert">{displayError}</div>}
 
         <form onSubmit={handleSubmit} className="auth-form" noValidate>
           <div className="form-group">

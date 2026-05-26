@@ -8,7 +8,6 @@ export function ProtectedRoute() {
   return isAuthenticated ? (
     <Outlet />
   ) : (
-    // Preserve the attempted URL so we can redirect back after login
     <Navigate to="/login" state={{ from: location }} replace />
   );
 }

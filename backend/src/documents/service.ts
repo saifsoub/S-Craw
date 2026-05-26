@@ -9,7 +9,7 @@ export interface Document {
   updated_at: Date;
 }
 
-// ─── CRUD ────────────────────────────────────────────────────────────────────
+// ─── CRUD ─────────────────────────────────────────────────────────────────────
 
 export async function createDocument(ownerId: string, title = 'Untitled Document'): Promise<Document> {
   const result = await pool.query<Document>(
@@ -95,15 +95,15 @@ export async function addCollaborator(
     throw Object.assign(new Error('Not authorized to manage collaborators'), { code: 'FORBIDDEN' });
   }
 
+  // Look up user by email in Supabase's auth.users table
   const userRow = await pool.query<{ id: string }>(
-    'SELECT id FROM users WHERE email = $1',
+    `SELECT id FROM auth.users WHERE email = $1`,
     [collaboratorEmail.toLowerCase()],
   );
   if (userRow.rows.length === 0) {
     throw Object.assign(new Error('No user found with that email'), { code: 'NOT_FOUND' });
   }
 
-  // Upsert: allow updating permission if already a collaborator
   await pool.query(
     `INSERT INTO document_collaborators (document_id, user_id, permission)
      VALUES ($1, $2, $3)
@@ -112,33 +112,19 @@ export async function addCollaborator(
   );
 }
 
-// ─── Yjs Persistence ─────────────────────────────────────────────────────────
+// ─── Yjs Persistence ──────────────────────────────────────────────────────────
 
-/**
- * Persist a Yjs binary update to the database.
- * Updates accumulate and are merged on load.  A background compaction
- * job (outside this module) should periodically merge them.
- */
-export async function persistDocumentUpdate(
-  documentId: string,
-  update: Uint8Array,
-): Promise<void> {
-  const buf = Buffer.from(update);
+export async function persistDocumentUpdate(documentId: string, update: Uint8Array): Promise<void> {
   await pool.query(
     `INSERT INTO document_updates (document_id, update_data) VALUES ($1, $2)`,
-    [documentId, buf],
+    [documentId, Buffer.from(update)],
   );
-  // Bump the document's updated_at for ordering in the list view
   await pool.query(
     `UPDATE documents SET updated_at = NOW() WHERE id = $1`,
     [documentId],
   );
 }
 
-/**
- * Load all persisted Yjs update binaries for a document in insertion order.
- * The caller applies them via Y.applyUpdate to reconstruct the document.
- */
 export async function getDocumentUpdates(documentId: string): Promise<Buffer[]> {
   const result = await pool.query<{ update_data: Buffer }>(
     `SELECT update_data FROM document_updates WHERE document_id = $1 ORDER BY id ASC`,
