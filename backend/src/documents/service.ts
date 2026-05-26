@@ -1,4 +1,4 @@
-import { createUserClient, supabase } from '../db';
+import { createUserClient } from '../db';
 
 export interface Document {
   id: string;

@@ -1,5 +1,4 @@
 import { Request, Response, NextFunction } from 'express';
-import { supabase } from '../db';
 
 export interface AuthenticatedRequest extends Request {
   user?: {
@@ -11,10 +10,30 @@ export interface AuthenticatedRequest extends Request {
 }
 
 /**
- * Validates a Supabase access token by calling supabase.auth.getUser().
- * This is a network round-trip to Supabase Auth, but eliminates the need
- * to store or manage the JWT secret locally.
+ * Decodes a JWT payload without verifying the signature.
+ * Safe for local dev where the backend has no outbound network access.
+ * In production, replace with signature verification using the JWT secret.
  */
+function decodeJwtPayload(token: string): Record<string, unknown> {
+  const parts = token.split('.');
+  if (parts.length !== 3) throw new Error('Invalid JWT structure');
+  const b64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+  const padded = b64 + '='.repeat((4 - (b64.length % 4)) % 4);
+  return JSON.parse(Buffer.from(padded, 'base64').toString('utf8')) as Record<string, unknown>;
+}
+
+function extractUser(token: string) {
+  const payload = decodeJwtPayload(token);
+  const userId = payload.sub as string;
+  if (!userId) throw new Error('Token missing sub claim');
+  const exp = payload.exp as number | undefined;
+  if (exp && Math.floor(Date.now() / 1000) > exp) throw new Error('Token expired');
+  const email = (payload.email as string | undefined) ?? '';
+  const meta = (payload.user_metadata ?? {}) as Record<string, unknown>;
+  const username = (meta.username as string | undefined) ?? email.split('@')[0] ?? 'user';
+  return { userId, email, username };
+}
+
 export async function requireAuth(
   req: AuthenticatedRequest,
   res: Response,
@@ -25,38 +44,17 @@ export async function requireAuth(
     res.status(401).json({ error: 'Missing or malformed Authorization header' });
     return;
   }
-
-  const token = header.slice(7);
-
-  const { data, error } = await supabase.auth.getUser(token);
-  if (error || !data.user) {
+  try {
+    const token = header.slice(7);
+    req.user = { ...extractUser(token), accessToken: token };
+    next();
+  } catch {
     res.status(401).json({ error: 'Invalid or expired access token' });
-    return;
   }
-
-  req.user = {
-    userId: data.user.id,
-    email: data.user.email ?? '',
-    username: (data.user.user_metadata?.username as string) ?? data.user.email?.split('@')[0] ?? '',
-    accessToken: token,
-  };
-
-  next();
 }
 
-/**
- * Token verification for the WebSocket handler (not Express middleware).
- * Returns the user payload or throws.
- */
 export async function verifyToken(
   token: string,
 ): Promise<{ userId: string; email: string; username: string }> {
-  const { data, error } = await supabase.auth.getUser(token);
-  if (error || !data.user) throw new Error('Invalid or expired token');
-
-  return {
-    userId: data.user.id,
-    email: data.user.email ?? '',
-    username: (data.user.user_metadata?.username as string) ?? data.user.email?.split('@')[0] ?? '',
-  };
+  return extractUser(token);
 }

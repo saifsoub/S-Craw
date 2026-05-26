@@ -60,7 +60,7 @@ export function CollaborativeEditor({ documentId }: Props) {
          *  - Awareness (cursors, selections) → remote cursor overlays
          *  - undoManager: true → per-user undo/redo via Y.UndoManager
          */
-        yCollab(ytext, awareness, { undoManager: true }),
+        yCollab(ytext, awareness),
         EditorView.lineWrapping,
         EditorView.theme({
           '&': { height: '100%', fontSize: '15px' },

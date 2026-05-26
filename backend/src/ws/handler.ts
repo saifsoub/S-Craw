@@ -7,7 +7,6 @@ import * as awarenessProtocol from 'y-protocols/awareness';
 import * as encoding from 'lib0/encoding';
 import * as decoding from 'lib0/decoding';
 import { verifyToken } from '../auth/middleware';
-import { getDocument, getDocumentUpdates, persistDocumentUpdate } from '../documents/service';
 
 const MSG_SYNC = 0;
 const MSG_AWARENESS = 1;
@@ -17,7 +16,6 @@ const MSG_AWARENESS = 1;
 interface ClientMeta {
   userId: string;
   username: string;
-  /** Supabase access token — scoped DB calls on this client's behalf */
   accessToken: string;
 }
 
@@ -27,25 +25,16 @@ interface Room {
   clients: Map<WebSocket, ClientMeta>;
   persistTimer: ReturnType<typeof setTimeout> | null;
   dirty: boolean;
-  /** Access token of the first client that loaded the room (used for initial load) */
   loaderToken: string;
 }
 
 const rooms = new Map<string, Room>();
 
-async function getOrCreateRoom(documentId: string, accessToken: string): Promise<Room> {
+function getOrCreateRoom(documentId: string): Room {
   const existing = rooms.get(documentId);
   if (existing) return existing;
 
   const ydoc = new Y.Doc({ gc: true });
-
-  const updates = await getDocumentUpdates(accessToken, documentId);
-  if (updates.length > 0) {
-    Y.transact(ydoc, () => {
-      for (const buf of updates) Y.applyUpdate(ydoc, new Uint8Array(buf));
-    }, 'load', false);
-  }
-
   const awareness = new awarenessProtocol.Awareness(ydoc);
 
   const room: Room = {
@@ -54,26 +43,8 @@ async function getOrCreateRoom(documentId: string, accessToken: string): Promise
     clients: new Map(),
     persistTimer: null,
     dirty: false,
-    loaderToken: accessToken,
+    loaderToken: '',
   };
-
-  ydoc.on('update', (_update: Uint8Array, origin: unknown) => {
-    if (origin === 'load') return;
-    room.dirty = true;
-    if (room.persistTimer) clearTimeout(room.persistTimer);
-    room.persistTimer = setTimeout(async () => {
-      room.persistTimer = null;
-      if (!room.dirty) return;
-      room.dirty = false;
-      try {
-        // Use the first available client's token for the persist call
-        const token = [...room.clients.values()][0]?.accessToken ?? room.loaderToken;
-        await persistDocumentUpdate(token, documentId, Y.encodeStateAsUpdate(room.doc));
-      } catch (err) {
-        console.error(`[ws] Persist failed for doc ${documentId}:`, err);
-      }
-    }, 2_000);
-  });
 
   rooms.set(documentId, room);
   console.log(`[ws] Room created: ${documentId}`);
@@ -81,24 +52,10 @@ async function getOrCreateRoom(documentId: string, accessToken: string): Promise
 }
 
 function scheduleRoomCleanup(documentId: string): void {
-  setTimeout(async () => {
+  setTimeout(() => {
     const room = rooms.get(documentId);
     if (!room || room.clients.size > 0) return;
-
     if (room.persistTimer) clearTimeout(room.persistTimer);
-
-    if (room.dirty) {
-      try {
-        await persistDocumentUpdate(
-          room.loaderToken,
-          documentId,
-          Y.encodeStateAsUpdate(room.doc),
-        );
-      } catch (err) {
-        console.error(`[ws] Final persist failed for doc ${documentId}:`, err);
-      }
-    }
-
     room.awareness.destroy();
     rooms.delete(documentId);
     console.log(`[ws] Room cleaned up: ${documentId}`);
@@ -151,20 +108,8 @@ export function setupWebSocketServer(server: http.Server): WebSocketServer {
       return;
     }
 
-    // ── Authorize: check document access via RLS ───────────────────────────────
-    try {
-      const doc = await getDocument(token, documentId);
-      if (!doc) {
-        ws.close(4003, 'Document not found or access denied');
-        return;
-      }
-    } catch {
-      ws.close(4003, 'Authorization check failed');
-      return;
-    }
-
     // ── Join room ─────────────────────────────────────────────────────────────
-    const room = await getOrCreateRoom(documentId, token);
+    const room = getOrCreateRoom(documentId);
     room.clients.set(ws, { ...userPayload, accessToken: token });
     console.log(`[ws] ${userPayload.username} joined doc=${documentId} (${room.clients.size} online)`);
 

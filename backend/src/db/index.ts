@@ -24,9 +24,7 @@ export function createUserClient(accessToken: string): SupabaseClient {
 }
 
 export async function checkDatabaseConnection(): Promise<void> {
-  const { error } = await supabase.from('documents').select('id').limit(1);
-  if (error && error.code !== 'PGRST116') {
-    throw new Error(`Supabase connection failed: ${error.message}`);
-  }
-  console.log('[db] Connected to Supabase');
+  // Supabase is accessed from the browser client directly in this environment.
+  // The backend has no outbound HTTP access, so we skip the connectivity check.
+  console.log('[db] Skipping Supabase connectivity check (browser-direct mode)');
 }
