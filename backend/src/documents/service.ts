@@ -1,134 +1,163 @@
-import { pool } from '../db';
+import { createUserClient, supabase } from '../db';
 
 export interface Document {
   id: string;
   owner_id: string;
   title: string;
   is_public: boolean;
-  created_at: Date;
-  updated_at: Date;
+  created_at: string;
+  updated_at: string;
+}
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+/** PostgREST represents BYTEA as `\x<hex>`. Convert Uint8Array → that format. */
+function toHex(data: Uint8Array): string {
+  return '\\x' + Buffer.from(data).toString('hex');
+}
+
+/** Convert PostgREST BYTEA `\x<hex>` → Buffer. */
+function fromHex(hex: string): Buffer {
+  return Buffer.from(hex.startsWith('\\x') ? hex.slice(2) : hex, 'hex');
 }
 
 // ─── CRUD ─────────────────────────────────────────────────────────────────────
 
-export async function createDocument(ownerId: string, title = 'Untitled Document'): Promise<Document> {
-  const result = await pool.query<Document>(
-    `INSERT INTO documents (owner_id, title) VALUES ($1, $2) RETURNING *`,
-    [ownerId, title],
-  );
-  return result.rows[0];
+export async function createDocument(
+  accessToken: string,
+  ownerId: string,
+  title = 'Untitled Document',
+): Promise<Document> {
+  const db = createUserClient(accessToken);
+  const { data, error } = await db
+    .from('documents')
+    .insert({ owner_id: ownerId, title })
+    .select()
+    .single();
+
+  if (error) throw new Error(error.message);
+  return data as Document;
 }
 
-export async function getUserDocuments(userId: string): Promise<Document[]> {
-  const result = await pool.query<Document>(
-    `SELECT DISTINCT d.*
-     FROM documents d
-     LEFT JOIN document_collaborators dc ON dc.document_id = d.id
-     WHERE d.owner_id = $1 OR dc.user_id = $1
-     ORDER BY d.updated_at DESC`,
-    [userId],
-  );
-  return result.rows;
+export async function getUserDocuments(accessToken: string): Promise<Document[]> {
+  const db = createUserClient(accessToken);
+  const { data, error } = await db
+    .from('documents')
+    .select('*')
+    .order('updated_at', { ascending: false });
+
+  if (error) throw new Error(error.message);
+  return (data ?? []) as Document[];
 }
 
-export async function getDocument(documentId: string, userId: string): Promise<Document | null> {
-  const result = await pool.query<Document>(
-    `SELECT d.*
-     FROM documents d
-     WHERE d.id = $1
-       AND (
-         d.owner_id = $2
-         OR d.is_public = TRUE
-         OR EXISTS (
-           SELECT 1 FROM document_collaborators dc
-           WHERE dc.document_id = d.id AND dc.user_id = $2
-         )
-       )`,
-    [documentId, userId],
-  );
-  return result.rows[0] ?? null;
+export async function getDocument(
+  accessToken: string,
+  documentId: string,
+): Promise<Document | null> {
+  const db = createUserClient(accessToken);
+  const { data, error } = await db
+    .from('documents')
+    .select('*')
+    .eq('id', documentId)
+    .single();
+
+  if (error) return null;
+  return data as Document;
 }
 
 export async function updateDocumentTitle(
+  accessToken: string,
   documentId: string,
-  userId: string,
   title: string,
 ): Promise<Document | null> {
-  const result = await pool.query<Document>(
-    `UPDATE documents
-     SET title = $1, updated_at = NOW()
-     WHERE id = $2
-       AND (
-         owner_id = $3
-         OR EXISTS (
-           SELECT 1 FROM document_collaborators dc
-           WHERE dc.document_id = documents.id
-             AND dc.user_id = $3
-             AND dc.permission = 'edit'
-         )
-       )
-     RETURNING *`,
-    [title, documentId, userId],
-  );
-  return result.rows[0] ?? null;
+  const db = createUserClient(accessToken);
+  const { data, error } = await db
+    .from('documents')
+    .update({ title, updated_at: new Date().toISOString() })
+    .eq('id', documentId)
+    .select()
+    .single();
+
+  if (error) return null;
+  return data as Document;
 }
 
-export async function deleteDocument(documentId: string, userId: string): Promise<boolean> {
-  const result = await pool.query(
-    `DELETE FROM documents WHERE id = $1 AND owner_id = $2`,
-    [documentId, userId],
-  );
-  return (result.rowCount ?? 0) > 0;
+export async function deleteDocument(
+  accessToken: string,
+  documentId: string,
+): Promise<boolean> {
+  const db = createUserClient(accessToken);
+  const { error } = await db
+    .from('documents')
+    .delete()
+    .eq('id', documentId);
+
+  return !error;
 }
 
 export async function addCollaborator(
+  accessToken: string,
   documentId: string,
-  ownerId: string,
   collaboratorEmail: string,
   permission: 'view' | 'edit',
 ): Promise<void> {
-  const ownerCheck = await pool.query(
-    'SELECT id FROM documents WHERE id = $1 AND owner_id = $2',
-    [documentId, ownerId],
-  );
-  if (ownerCheck.rows.length === 0) {
-    throw Object.assign(new Error('Not authorized to manage collaborators'), { code: 'FORBIDDEN' });
-  }
+  const db = createUserClient(accessToken);
 
-  // Look up user by email in Supabase's auth.users table
-  const userRow = await pool.query<{ id: string }>(
-    `SELECT id FROM auth.users WHERE email = $1`,
-    [collaboratorEmail.toLowerCase()],
-  );
-  if (userRow.rows.length === 0) {
+  // Look up user ID by email via SECURITY DEFINER function
+  const { data: userId, error: lookupError } = await db
+    .rpc('find_user_id_by_email', { email_input: collaboratorEmail });
+
+  if (lookupError || !userId) {
     throw Object.assign(new Error('No user found with that email'), { code: 'NOT_FOUND' });
   }
 
-  await pool.query(
-    `INSERT INTO document_collaborators (document_id, user_id, permission)
-     VALUES ($1, $2, $3)
-     ON CONFLICT (document_id, user_id) DO UPDATE SET permission = EXCLUDED.permission`,
-    [documentId, userRow.rows[0].id, permission],
-  );
+  const { error } = await db
+    .from('document_collaborators')
+    .upsert({ document_id: documentId, user_id: userId, permission });
+
+  if (error) {
+    throw Object.assign(new Error('Not authorized to manage collaborators'), { code: 'FORBIDDEN' });
+  }
 }
 
 // ─── Yjs Persistence ──────────────────────────────────────────────────────────
 
-export async function persistDocumentUpdate(documentId: string, update: Uint8Array): Promise<void> {
-  await pool.query(
-    `INSERT INTO document_updates (document_id, update_data) VALUES ($1, $2)`,
-    [documentId, Buffer.from(update)],
-  );
-  await pool.query(
-    `UPDATE documents SET updated_at = NOW() WHERE id = $1`,
-    [documentId],
-  );
+/**
+ * Persist a Yjs binary update.
+ * Uses the admin client (anon key) for performance — RLS on document_updates
+ * INSERT policy still enforces authorization via the document ownership check.
+ * We pass the user's token so the policy can resolve auth.uid().
+ */
+export async function persistDocumentUpdate(
+  accessToken: string,
+  documentId: string,
+  update: Uint8Array,
+): Promise<void> {
+  const db = createUserClient(accessToken);
+  await db.from('document_updates').insert({
+    document_id: documentId,
+    update_data: toHex(update),
+  });
+  await db.from('documents')
+    .update({ updated_at: new Date().toISOString() })
+    .eq('id', documentId);
 }
 
-export async function getDocumentUpdates(documentId: string): Promise<Buffer[]> {
-  const result = await pool.query<{ update_data: Buffer }>(
-    `SELECT update_data FROM document_updates WHERE document_id = $1 ORDER BY id ASC`,
-    [documentId],
-  );
-  return result.rows.map((r) => r.update_data);
+/**
+ * Load all persisted Yjs updates for a document in order.
+ * The caller merges them via Y.applyUpdate to reconstruct state.
+ */
+export async function getDocumentUpdates(
+  accessToken: string,
+  documentId: string,
+): Promise<Buffer[]> {
+  const db = createUserClient(accessToken);
+  const { data, error } = await db
+    .from('document_updates')
+    .select('update_data')
+    .eq('document_id', documentId)
+    .order('id', { ascending: true });
+
+  if (error) throw new Error(error.message);
+  return (data ?? []).map((row: { update_data: string }) => fromHex(row.update_data));
 }

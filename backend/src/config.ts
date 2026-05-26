@@ -1,6 +1,12 @@
 import dotenv from 'dotenv';
 dotenv.config();
 
+function required(key: string): string {
+  const val = process.env[key];
+  if (!val) throw new Error(`Missing required env var: ${key}`);
+  return val;
+}
+
 function optional(key: string, fallback: string): string {
   return process.env[key] ?? fallback;
 }
@@ -8,19 +14,6 @@ function optional(key: string, fallback: string): string {
 export const config = {
   port: parseInt(optional('PORT', '4000'), 10),
   corsOrigin: optional('CORS_ORIGIN', 'http://localhost:5173'),
-
-  /**
-   * Supabase JWT secret — used to verify tokens issued by Supabase Auth.
-   * Found in: Supabase Dashboard → Settings → API → JWT Secret
-   */
-  supabaseJwtSecret: optional('SUPABASE_JWT_SECRET', ''),
-
-  /**
-   * Direct PostgreSQL connection string to Supabase.
-   * Found in: Supabase Dashboard → Settings → Database → Connection string
-   */
-  databaseUrl: optional(
-    'DATABASE_URL',
-    'postgresql://postgres:postgres@localhost:5432/postgres',
-  ),
+  supabaseUrl: required('SUPABASE_URL'),
+  supabaseAnonKey: required('SUPABASE_ANON_KEY'),
 } as const;

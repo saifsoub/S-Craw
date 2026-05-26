@@ -1,30 +1,32 @@
-import { Pool } from 'pg';
+import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { config } from '../config';
 
 /**
- * PostgreSQL connection pool pointing at Supabase.
- * Schema is managed via Supabase migrations — no DDL runs here.
+ * Admin Supabase client (anon key).
+ * For user-specific operations, call createUserClient(token) instead —
+ * it scopes requests to that user's session so RLS policies apply.
  */
-export const pool = new Pool({
-  connectionString: config.databaseUrl,
-  max: 20,
-  idleTimeoutMillis: 30_000,
-  connectionTimeoutMillis: 5_000,
-  ssl: config.databaseUrl.includes('supabase.co')
-    ? { rejectUnauthorized: false }
-    : false,
-});
+export const supabase: SupabaseClient = createClient(
+  config.supabaseUrl,
+  config.supabaseAnonKey,
+  { auth: { persistSession: false } },
+);
 
-pool.on('error', (err) => {
-  console.error('[db] Unexpected pool error:', err);
-});
+/**
+ * Returns a Supabase client scoped to a specific user's access token.
+ * All DB operations go through PostgREST with RLS enforced.
+ */
+export function createUserClient(accessToken: string): SupabaseClient {
+  return createClient(config.supabaseUrl, config.supabaseAnonKey, {
+    auth: { persistSession: false },
+    global: { headers: { Authorization: `Bearer ${accessToken}` } },
+  });
+}
 
 export async function checkDatabaseConnection(): Promise<void> {
-  const client = await pool.connect();
-  try {
-    await client.query('SELECT 1');
-    console.log('[db] Connected to Supabase PostgreSQL');
-  } finally {
-    client.release();
+  const { error } = await supabase.from('documents').select('id').limit(1);
+  if (error && error.code !== 'PGRST116') {
+    throw new Error(`Supabase connection failed: ${error.message}`);
   }
+  console.log('[db] Connected to Supabase');
 }

@@ -12,11 +12,10 @@ import { requireAuth, AuthenticatedRequest } from '../auth/middleware';
 const router = Router();
 router.use(requireAuth);
 
-// POST /api/documents
 router.post('/', async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const title = typeof req.body?.title === 'string' ? req.body.title : undefined;
-    const doc = await createDocument(req.user!.userId, title);
+    const doc = await createDocument(req.user!.accessToken, req.user!.userId, title);
     res.status(201).json(doc);
   } catch (err) {
     console.error('[documents/create]', err);
@@ -24,10 +23,9 @@ router.post('/', async (req: AuthenticatedRequest, res: Response): Promise<void>
   }
 });
 
-// GET /api/documents
 router.get('/', async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
-    const docs = await getUserDocuments(req.user!.userId);
+    const docs = await getUserDocuments(req.user!.accessToken);
     res.json(docs);
   } catch (err) {
     console.error('[documents/list]', err);
@@ -35,14 +33,10 @@ router.get('/', async (req: AuthenticatedRequest, res: Response): Promise<void> 
   }
 });
 
-// GET /api/documents/:id
 router.get('/:id', async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
-    const doc = await getDocument(req.params.id, req.user!.userId);
-    if (!doc) {
-      res.status(404).json({ error: 'Document not found or access denied' });
-      return;
-    }
+    const doc = await getDocument(req.user!.accessToken, req.params.id);
+    if (!doc) { res.status(404).json({ error: 'Document not found or access denied' }); return; }
     res.json(doc);
   } catch (err) {
     console.error('[documents/get]', err);
@@ -50,19 +44,14 @@ router.get('/:id', async (req: AuthenticatedRequest, res: Response): Promise<voi
   }
 });
 
-// PATCH /api/documents/:id/title
 router.patch('/:id/title', async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   const { title } = req.body ?? {};
-  if (!title || typeof title !== 'string' || !title.trim()) {
-    res.status(400).json({ error: 'title is required' });
-    return;
+  if (!title || typeof title !== 'string') {
+    res.status(400).json({ error: 'title is required' }); return;
   }
   try {
-    const doc = await updateDocumentTitle(req.params.id, req.user!.userId, title.trim());
-    if (!doc) {
-      res.status(404).json({ error: 'Document not found or access denied' });
-      return;
-    }
+    const doc = await updateDocumentTitle(req.user!.accessToken, req.params.id, title.trim());
+    if (!doc) { res.status(404).json({ error: 'Document not found or access denied' }); return; }
     res.json(doc);
   } catch (err) {
     console.error('[documents/updateTitle]', err);
@@ -70,14 +59,10 @@ router.patch('/:id/title', async (req: AuthenticatedRequest, res: Response): Pro
   }
 });
 
-// DELETE /api/documents/:id
 router.delete('/:id', async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
-    const deleted = await deleteDocument(req.params.id, req.user!.userId);
-    if (!deleted) {
-      res.status(404).json({ error: 'Document not found or access denied' });
-      return;
-    }
+    const deleted = await deleteDocument(req.user!.accessToken, req.params.id);
+    if (!deleted) { res.status(404).json({ error: 'Document not found or access denied' }); return; }
     res.json({ message: 'Document deleted' });
   } catch (err) {
     console.error('[documents/delete]', err);
@@ -85,25 +70,20 @@ router.delete('/:id', async (req: AuthenticatedRequest, res: Response): Promise<
   }
 });
 
-// POST /api/documents/:id/collaborators
 router.post('/:id/collaborators', async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   const { email, permission } = req.body ?? {};
-
   if (!email || !permission) {
-    res.status(400).json({ error: 'email and permission are required' });
-    return;
+    res.status(400).json({ error: 'email and permission are required' }); return;
   }
   if (!['view', 'edit'].includes(permission)) {
-    res.status(400).json({ error: 'permission must be "view" or "edit"' });
-    return;
+    res.status(400).json({ error: 'permission must be "view" or "edit"' }); return;
   }
-
   try {
-    await addCollaborator(req.params.id, req.user!.userId, String(email), permission);
+    await addCollaborator(req.user!.accessToken, req.params.id, String(email), permission);
     res.json({ message: 'Collaborator added' });
   } catch (err: unknown) {
     const e = err as Error & { code?: string };
-    if (e.code === 'FORBIDDEN' || e.code === 'NOT_FOUND') {
+    if (e.code === 'NOT_FOUND' || e.code === 'FORBIDDEN') {
       res.status(400).json({ error: e.message });
     } else {
       console.error('[documents/addCollaborator]', err);

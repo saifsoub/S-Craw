@@ -1,37 +1,25 @@
 import { Request, Response, NextFunction } from 'express';
-import jwt from 'jsonwebtoken';
-import { config } from '../config';
-
-export interface SupabaseTokenPayload {
-  sub: string;          // user UUID (maps to auth.users.id)
-  email: string;
-  role: string;
-  user_metadata: {
-    username?: string;
-    [key: string]: unknown;
-  };
-  aud: string;
-  exp: number;
-}
+import { supabase } from '../db';
 
 export interface AuthenticatedRequest extends Request {
   user?: {
     userId: string;
     email: string;
     username: string;
+    accessToken: string;
   };
 }
 
 /**
- * Verifies a Supabase-issued JWT using the project's JWT secret.
- * The token is sourced from the Authorization: Bearer header.
- * Supabase places the user UUID in `sub`, not `userId`.
+ * Validates a Supabase access token by calling supabase.auth.getUser().
+ * This is a network round-trip to Supabase Auth, but eliminates the need
+ * to store or manage the JWT secret locally.
  */
-export function requireAuth(
+export async function requireAuth(
   req: AuthenticatedRequest,
   res: Response,
   next: NextFunction,
-): void {
+): Promise<void> {
   const header = req.headers.authorization;
   if (!header?.startsWith('Bearer ')) {
     res.status(401).json({ error: 'Missing or malformed Authorization header' });
@@ -40,25 +28,35 @@ export function requireAuth(
 
   const token = header.slice(7);
 
-  try {
-    const payload = jwt.verify(token, config.supabaseJwtSecret) as SupabaseTokenPayload;
-
-    req.user = {
-      userId: payload.sub,
-      email: payload.email,
-      username: payload.user_metadata?.username ?? payload.email.split('@')[0],
-    };
-    next();
-  } catch {
+  const { data, error } = await supabase.auth.getUser(token);
+  if (error || !data.user) {
     res.status(401).json({ error: 'Invalid or expired access token' });
+    return;
   }
+
+  req.user = {
+    userId: data.user.id,
+    email: data.user.email ?? '',
+    username: (data.user.user_metadata?.username as string) ?? data.user.email?.split('@')[0] ?? '',
+    accessToken: token,
+  };
+
+  next();
 }
 
-export function verifyAccessToken(token: string): { userId: string; email: string; username: string } {
-  const payload = jwt.verify(token, config.supabaseJwtSecret) as SupabaseTokenPayload;
+/**
+ * Token verification for the WebSocket handler (not Express middleware).
+ * Returns the user payload or throws.
+ */
+export async function verifyToken(
+  token: string,
+): Promise<{ userId: string; email: string; username: string }> {
+  const { data, error } = await supabase.auth.getUser(token);
+  if (error || !data.user) throw new Error('Invalid or expired token');
+
   return {
-    userId: payload.sub,
-    email: payload.email,
-    username: payload.user_metadata?.username ?? payload.email.split('@')[0],
+    userId: data.user.id,
+    email: data.user.email ?? '',
+    username: (data.user.user_metadata?.username as string) ?? data.user.email?.split('@')[0] ?? '',
   };
 }
