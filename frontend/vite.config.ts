@@ -5,6 +5,8 @@ export default defineConfig({
   plugins: [react()],
   server: {
     port: 5173,
+    host: true,          // bind to 0.0.0.0 so the cloud proxy can reach it
+    strictPort: true,
     proxy: {
       // REST API
       '/api': {
