@@ -1,5 +1,5 @@
 import { useEffect, ReactNode } from 'react';
-import { BrowserRouter, Routes, Route, Navigate, useParams } from 'react-router-dom';
+import { HashRouter, Routes, Route, Navigate, useParams } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
 import { supabase } from './lib/supabase';
@@ -58,7 +58,7 @@ function EditorPage() {
 export default function App() {
   return (
     <QueryClientProvider client={queryClient}>
-      <BrowserRouter>
+      <HashRouter>
         <AuthProvider>
           <Routes>
             <Route path="/login" element={<LoginForm />} />
@@ -72,7 +72,7 @@ export default function App() {
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </AuthProvider>
-      </BrowserRouter>
+      </HashRouter>
     </QueryClientProvider>
   );
 }

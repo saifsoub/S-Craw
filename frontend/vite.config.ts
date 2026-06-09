@@ -3,6 +3,7 @@ import react from '@vitejs/plugin-react';
 
 export default defineConfig({
   plugins: [react()],
+  base: process.env.NODE_ENV === 'production' ? '/s-craw/' : '/',
   server: {
     port: 5173,
     host: true,          // bind to 0.0.0.0 so the cloud proxy can reach it
